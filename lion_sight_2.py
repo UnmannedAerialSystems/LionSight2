@@ -131,16 +131,16 @@ class LionSight2:
                         self.net.img = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
                         score = self.net.run_net()
                         
-                        # if this should contain a true point
-                        for true_point in self.true_points:
-                            true_x, true_y = true_point
-                            if (x <= true_x < x + crop_size and
-                                y <= true_y < y + crop_size):
+                        # # if this should contain a true point
+                        # for true_point in self.true_points:
+                        #     true_x, true_y = true_point
+                        #     if (x <= true_x < x + crop_size and
+                        #         y <= true_y < y + crop_size):
                                 
-                                # display the crop with score
-                                cv2.imshow(f"{score}", crop)
-                                cv2.waitKey(1)
-                                cv2.destroyAllWindows()
+                        #         # display the crop with score
+                        #         cv2.imshow(f"{score}", crop)
+                        #         cv2.waitKey(1)
+                        #         cv2.destroyAllWindows()
 
                         results.append((x, y, score))
                         break  # Only use one image per crop
@@ -160,7 +160,7 @@ def main():
     from detect_zone_generator import Runway
     import matplotlib.pyplot as plt
 
-    runway = Runway('./runway_smaller.png', height=800, y_offset=400, ratio=2, num_targets=4)
+    runway = Runway('./runway_smaller.png', height=800, y_offset=400, ratio=8, num_targets=4)
     runway.assign_targets()
     runway.apply_motion_blur()
     photos = runway.generate_photos(20)
@@ -175,11 +175,11 @@ def main():
         cv2.imwrite(photo_path, photo_to_save)
 
     orb = ClusterORB(n_clusters=20, n_features=1024)
-    net = LS2Network("lion_sight_2_model.pth")
+    net = LS2Network("lion_sight_2_model_p2.pth")
     lion_sight = LionSight2(num_targets=4, net=net, orb=orb)
     lion_sight.true_points = runway.points
     lion_sight.load_images(output_dir)
-    best_points = lion_sight.detect_dense()
+    best_points = lion_sight.detect_dense(top_k=4)
 
 
     # # Plot the cluster centers
@@ -205,7 +205,7 @@ def main():
     for i, point in enumerate(best_points):
         plt.annotate(f"Score: {point[2]:.2f}", (point[0], point[1]), textcoords="offset points", xytext=(0,10), ha='center')
 
-    plt.show()
+    plt.savefig("best_points.png")
 
 
     

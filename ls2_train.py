@@ -8,9 +8,8 @@ import os
 from collections import Counter
 
 # === CONFIG === #
-TRAIN_DIRECTORY = './training_data'
-VALIDATION_DIRECTORY = './validation_data'
-NUM_EPOCHS = 3
+TRAIN_DIRECTORY = './train_p2'
+NUM_EPOCHS = 80
 BATCH_SIZE = 32
 MODEL_PATH = 'lion_sight_2_model.pth'  
 USE_GPU = torch.cuda.is_available()
@@ -61,6 +60,7 @@ full_dataset = datasets.ImageFolder(root=TRAIN_DIRECTORY, transform=transform)
 train_size = int(0.8 * len(full_dataset))
 val_size = len(full_dataset) - train_size
 train_dataset, validation_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
+print(f"Train samples: {len(train_dataset)} | Validation samples: {len(validation_dataset)}")
 
 # === Account for class imbalance === #
 # Count labels in dataset
@@ -68,6 +68,7 @@ targets = [label for _, label in full_dataset.samples]
 counts = Counter(targets)
 total = sum(counts.values())
 class_weights = [total / counts[i] for i in range(len(counts))]  # Inverse frequency
+print(f"Class weights: {class_weights}")
 
 # Turn into tensor
 weights_tensor = torch.tensor(class_weights, dtype=torch.float).to(device)
@@ -82,26 +83,31 @@ validation_loader = DataLoader(validation_dataset, batch_size=BATCH_SIZE, shuffl
 # === Optional: Check split === #
 print(f"Train samples: {len(train_dataset)} | Validation samples: {len(validation_dataset)}")
 
-# === Training loop === #
-for epoch in range(NUM_EPOCHS):
-    model.train()
-    running_loss = 0.0
-    progress_bar = tqdm(train_loader, desc=f"Epoch [{epoch + 1}/{NUM_EPOCHS}]")
+# === Training loop with KeyboardInterrupt handling === #
+try:
+    for epoch in range(NUM_EPOCHS):
+        model.train()
+        running_loss = 0.0
+        progress_bar = tqdm(train_loader, desc=f"Epoch [{epoch + 1}/{NUM_EPOCHS}]")
 
-    for images, labels in progress_bar:
-        images, labels = images.to(device), labels.to(device)
-        labels = labels.view(-1, 1)
+        for images, labels in progress_bar:
+            images, labels = images.to(device), labels.to(device)
+            labels = labels.view(-1, 1)
 
-        optimizer.zero_grad()
-        outputs = model(images)
-        loss = criterion(outputs, labels.float())
-        loss.backward()
-        optimizer.step()
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, labels.float())
+            loss.backward()
+            optimizer.step()
 
-        running_loss += loss.item()
-        progress_bar.set_postfix(loss=(running_loss / len(train_loader)))
-    
-    print(f"Epoch [{epoch + 1}/{NUM_EPOCHS}], Loss: {running_loss / len(train_loader):.4f}")
+            running_loss += loss.item()
+            progress_bar.set_postfix(loss=(running_loss / len(train_loader)))
+        
+        print(f"Epoch [{epoch + 1}/{NUM_EPOCHS}], Loss: {running_loss / len(train_loader):.4f}")
+except KeyboardInterrupt:
+    print("\nTraining interrupted. Saving current model state...")
+    torch.save(model.state_dict(), 'lion_sight_2_model_interrupted.pth')
+    print("Model saved as lion_sight_2_model_interrupted.pth")
 
 # === Validation loop === #
 model.eval()
