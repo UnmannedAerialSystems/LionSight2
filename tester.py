@@ -16,8 +16,14 @@ MODEL_PATH = "lion_sight_2_model.pth"
 TARGETS_DIRECTORY = "./targets_2"
 RUNWAY_IMAGE = "runway_smaller.png"
 CROP_SIZE = 224
+NUM_EPOCHS = 1000
+
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-NUM_EPOCHS = 5
+if DEVICE.type == "cuda":
+    print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+else:
+    print("Using CPU")
+
 # ---------------- #
 
 # === Define same transform as in training === #
@@ -84,7 +90,8 @@ def crop_and_predict(img, point):
 print("=== Testing Generalization on Object and Background Patches ===\n")
 
 progress_bar = tqdm(total=NUM_EPOCHS, desc="Testing", unit="epoch")
-
+no_count = 0
+yes_count = 0
 for epoch in range(NUM_EPOCHS):
 
     runway = generate_test_scene()
@@ -95,14 +102,16 @@ for epoch in range(NUM_EPOCHS):
     for i, pt in enumerate(true_targets):
         crop, prob = crop_and_predict(runway.runway, pt)
         if prob < 0.5:
-            output_path = f"./training_data/object_present/true_target_{i+1}.png"
+            output_path = f"./train_p2/object_present/true_target_{no_count}.png"
             cv2.imwrite(output_path, cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))
+            no_count += 1
 
     # Test background points
     for i, pt in enumerate(bg_points):
         crop, prob = crop_and_predict(runway.runway, pt)
         if prob >= 0.5:
-            output_path = f"./training_data/no_object/background_point_{i+1}.png"
+            output_path = f"./train_p2/no_object/background_point_{yes_count}.png"
             cv2.imwrite(output_path, cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))
+            yes_count += 1
 
     progress_bar.update(1)
