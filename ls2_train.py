@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm # type: ignore
 from torchvision import transforms, datasets, models # type: ignore
 import os
+from collections import Counter
 
 # === CONFIG === #
 TRAIN_DIRECTORY = './training_data'
@@ -41,8 +42,7 @@ model.to(device)
 # for param in model.features.parameters():
 #     param.requires_grad = False
 
-# === Set up loss and optimizer === #
-criterion = nn.BCEWithLogitsLoss()
+# === Set up optimizer === #
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 
 # === Define transform === #
@@ -54,12 +54,33 @@ transform = transforms.Compose([
                          std=[0.229, 0.224, 0.225])
 ])
 
-# === Load datasets === #
-train_dataset = datasets.ImageFolder(root=TRAIN_DIRECTORY, transform=transform)
-train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+# === Load full dataset from a single directory === #
+full_dataset = datasets.ImageFolder(root=TRAIN_DIRECTORY, transform=transform)
 
-validation_dataset = datasets.ImageFolder(root=VALIDATION_DIRECTORY, transform=transform)
+# === Split into train and validation subsets === #
+train_size = int(0.8 * len(full_dataset))
+val_size = len(full_dataset) - train_size
+train_dataset, validation_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
+
+# === Account for class imbalance === #
+# Count labels in dataset
+targets = [label for _, label in full_dataset.samples]
+counts = Counter(targets)
+total = sum(counts.values())
+class_weights = [total / counts[i] for i in range(len(counts))]  # Inverse frequency
+
+# Turn into tensor
+weights_tensor = torch.tensor(class_weights, dtype=torch.float).to(device)
+
+# Then use in your function:
+criterion = nn.BCEWithLogitsLoss(pos_weight=weights_tensor[1])  # Only applies to positive class
+
+# === Data loaders === #
+train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
 validation_loader = DataLoader(validation_dataset, batch_size=BATCH_SIZE, shuffle=False)
+
+# === Optional: Check split === #
+print(f"Train samples: {len(train_dataset)} | Validation samples: {len(validation_dataset)}")
 
 # === Training loop === #
 for epoch in range(NUM_EPOCHS):
