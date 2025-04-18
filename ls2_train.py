@@ -4,11 +4,21 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm # type: ignore
 from torchvision import transforms, datasets, models # type: ignore
+import os
 
+# === CONFIG === #
 TRAIN_DIRECTORY = './training_data'
 VALIDATION_DIRECTORY = './validation_data'
-NUM_EPOCHS = 1
+NUM_EPOCHS = 3
+BATCH_SIZE = 32
+MODEL_PATH = 'lion_sight_2_model.pth'  
+USE_GPU = torch.cuda.is_available()
+# =============== #
 
+device = torch.device("cuda" if USE_GPU else "cpu")
+print(f"Using device: {device}")
+
+# === Load MobileNetV2 and Modify === #
 print("Loading MobileNetV2 model...")
 model = models.mobilenet_v2(pretrained=True)
 model.classifier = nn.Sequential(
@@ -18,41 +28,47 @@ model.classifier = nn.Sequential(
     nn.Linear(512, 1),
 )
 
+# === Load existing trained weights === #
+if os.path.exists(MODEL_PATH):
+    print(f"Loading model weights from: {MODEL_PATH}")
+    model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+else:
+    print(f"WARNING: {MODEL_PATH} not found. Starting from scratch.")
+
+model.to(device)
+
+# === Optional: Freeze feature extractor if you only want to train classifier === #
+# for param in model.features.parameters():
+#     param.requires_grad = False
+
+# === Set up loss and optimizer === #
 criterion = nn.BCEWithLogitsLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 
+# === Define transform === #
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.RandomHorizontalFlip(),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225])
 ])
 
-if torch.cuda.is_available():
-    print("CUDA is available. Using GPU.")
-    device = torch.device("cuda")
-else:
-    print("CUDA is not available. Using CPU.")
-    device = torch.device("cpu")
-model.to(device)
-
-# Load the dataset
+# === Load datasets === #
 train_dataset = datasets.ImageFolder(root=TRAIN_DIRECTORY, transform=transform)
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
 
-# Load the validation dataset
 validation_dataset = datasets.ImageFolder(root=VALIDATION_DIRECTORY, transform=transform)
-validation_loader = DataLoader(validation_dataset, batch_size=32, shuffle=False)
+validation_loader = DataLoader(validation_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
-# Training loop
+# === Training loop === #
 for epoch in range(NUM_EPOCHS):
     model.train()
     running_loss = 0.0
     progress_bar = tqdm(train_loader, desc=f"Epoch [{epoch + 1}/{NUM_EPOCHS}]")
+
     for images, labels in progress_bar:
         images, labels = images.to(device), labels.to(device)
-
-        # Reshape labels to match the output shape
         labels = labels.view(-1, 1)
 
         optimizer.zero_grad()
@@ -66,7 +82,7 @@ for epoch in range(NUM_EPOCHS):
     
     print(f"Epoch [{epoch + 1}/{NUM_EPOCHS}], Loss: {running_loss / len(train_loader):.4f}")
 
-# Validation loop
+# === Validation loop === #
 model.eval()
 running_corrects = 0
 running_loss = 0.0
@@ -75,17 +91,15 @@ with torch.no_grad():
     progress_bar = tqdm(validation_loader, desc="Validation")
     for images, labels in progress_bar:
         images, labels = images.to(device), labels.to(device)
-
-        # Reshape labels to match the output shape
         labels = labels.view(-1, 1)
 
         outputs = model(images)
         loss = criterion(outputs, labels.float())
-
         running_loss += loss.item()
 
-        predictions = torch.round(outputs)
-        running_corrects += torch.sum(predictions == labels.data.view_as(predictions)).item() # type: ignore
+        probs = torch.sigmoid(outputs)
+        preds = (probs > 0.5).float()
+        running_corrects += int(torch.sum(preds == labels).item())
 
         progress_bar.set_postfix(loss=(running_loss / len(validation_loader)))
 
@@ -94,7 +108,6 @@ with torch.no_grad():
 
     print(f"Validation Loss: {epoch_loss:.4f}, Accuracy: {epoch_acc:.4f}")
 
-
-# Save the model
-torch.save(model.state_dict(), 'lion_sight_2_model_test.pth')
-print("Model saved as lion_sight_2_model.pth")
+# === Save fine-tuned model === #
+torch.save(model.state_dict(), 'lion_sight_2_model_p2.pth')
+print("Fine-tuned model saved as lion_sight_2_model_p2.pth")
