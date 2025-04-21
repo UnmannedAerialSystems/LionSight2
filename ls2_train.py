@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
+from sklearn.model_selection import train_test_split
 from tqdm import tqdm # type: ignore
 from torchvision import transforms, datasets, models # type: ignore
 import os
@@ -57,18 +58,31 @@ transform = transforms.Compose([
 full_dataset = datasets.ImageFolder(root=TRAIN_DIRECTORY, transform=transform)
 
 # === Split into train and validation subsets === #
-train_size = int(0.8 * len(full_dataset))
-val_size = len(full_dataset) - train_size
-train_dataset, validation_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
-print(f"Train samples: {len(train_dataset)} | Validation samples: {len(validation_dataset)}")
+# Get image paths and labels
+samples = full_dataset.samples
+filepaths, labels = zip(*samples)
+
+train_idx, val_idx = train_test_split(
+    list(range(len(labels))),
+    stratify=labels,
+    test_size=0.2,
+)
+
+# Subset datasets
+train_dataset = Subset(full_dataset, train_idx)
+validation_dataset = Subset(full_dataset, val_idx)
 
 # === Account for class imbalance === #
-# Count labels in dataset
-targets = [label for _, label in full_dataset.samples]
-counts = Counter(targets)
+# Count class labels only in the training split
+train_targets = [full_dataset.samples[i][1] for i in train_dataset.indices]
+counts = Counter(train_targets)
 total = sum(counts.values())
-class_weights = [total / counts[i] for i in range(len(counts))]  # Inverse frequency
-print(f"Class weights: {class_weights}")
+class_weights = [total / counts[i] for i in range(len(counts))]
+print(f"Class weights (based on training split): {class_weights}")
+
+weights_tensor = torch.tensor(class_weights, dtype=torch.float).to(device)
+criterion = nn.BCEWithLogitsLoss(pos_weight=weights_tensor[1])
+
 
 # Turn into tensor
 weights_tensor = torch.tensor(class_weights, dtype=torch.float).to(device)
@@ -80,8 +94,10 @@ criterion = nn.BCEWithLogitsLoss(pos_weight=weights_tensor[1])  # Only applies t
 train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
 validation_loader = DataLoader(validation_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
-# === Optional: Check split === #
+# === Check split === #
 print(f"Train samples: {len(train_dataset)} | Validation samples: {len(validation_dataset)}")
+train_labels = [full_dataset.samples[i][1] for i in train_dataset.indices]
+print("Training set class counts:", Counter(train_labels))
 
 # === Training loop with KeyboardInterrupt handling === #
 try:

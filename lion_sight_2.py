@@ -91,7 +91,7 @@ class LionSight2:
         return results, cluster_centers
     
 
-    def detect_dense(self, stride=32, crop_size=224, top_k=10):
+    def detect_dense(self, stride=32, crop_size=224):
         """
         Densely scan the entire stitched area, score with the network, and return top-K detections.
         """
@@ -131,25 +131,51 @@ class LionSight2:
                         self.net.img = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
                         score = self.net.run_net()
                         
-                        # # if this should contain a true point
-                        # for true_point in self.true_points:
-                        #     true_x, true_y = true_point
-                        #     if (x <= true_x < x + crop_size and
-                        #         y <= true_y < y + crop_size):
+                        # if this should contain a true point
+                        for true_point in self.true_points:
+                            true_x, true_y = true_point
+                            if (x <= true_x < x + crop_size and
+                                y <= true_y < y + crop_size):
                                 
-                        #         # display the crop with score
-                        #         cv2.imshow(f"{score}", crop)
-                        #         cv2.waitKey(1)
-                        #         cv2.destroyAllWindows()
+                                # display the crop with score
+                                cv2.imshow(f"{score}", crop)
+                                cv2.waitKey(0)
+                                cv2.destroyAllWindows()
+
+                        if score > 50:
+                            cv2.imshow(f"{score}", crop)
+                            cv2.waitKey(1)
+                            cv2.destroyAllWindows()
 
                         results.append((x, y, score))
                         break  # Only use one image per crop
 
                 progress_bar.update(1)
 
-        # Sort and return top-K
-        best_points = sorted(results, key=lambda x: x[2], reverse=True)[:top_k]
-        return best_points
+        return results
+    
+
+    def get_nms(self, detections, distance_threshold=200, top_k=4):
+        """
+        Apply Non-Maximum Suppression (NMS) to filter out overlapping detections.
+        """
+        # Sort results by score
+        detections = sorted(detections, key=lambda x: x[2], reverse=True)
+
+        # Initialize a list to hold the final results
+        final_results = []
+
+        while detections:
+            # Take the highest score detection
+            best = detections.pop(0)
+            final_results.append(best)
+
+            detections = [
+                d for d in detections
+                if np.linalg.norm(np.array(d[:2]) - np.array(best[:2])) > distance_threshold
+            ]
+
+        return final_results[:top_k]
 
 
 
@@ -175,12 +201,14 @@ def main():
         cv2.imwrite(photo_path, photo_to_save)
 
     orb = ClusterORB(n_clusters=20, n_features=1024)
-    net = LS2Network("lion_sight_2_model_p2.pth")
+    net = LS2Network("lion_sight_2_model.pth")
     lion_sight = LionSight2(num_targets=4, net=net, orb=orb)
     lion_sight.true_points = runway.points
     lion_sight.load_images(output_dir)
-    best_points = lion_sight.detect_dense(top_k=4)
-
+    results = lion_sight.detect_dense()
+    best_100 = lion_sight.get_nms(results, distance_threshold=100, top_k=20)
+    best_200 = lion_sight.get_nms(results, distance_threshold=200, top_k=20)
+    best_300 = lion_sight.get_nms(results, distance_threshold=300, top_k=20)
 
     # # Plot the cluster centers
     # for center in centers:
@@ -200,12 +228,14 @@ def main():
         plt.scatter(target[0], target[1], c='black', marker='x', label=f"Target {i+1}")
 
     # Plot best cluster centers
-    best_points = np.array(best_points)
-    plt.scatter(best_points[:, 0], best_points[:, 1], c='red', marker='+', s=100, label="Best Points")
-    for i, point in enumerate(best_points):
-        plt.annotate(f"Score: {point[2]:.2f}", (point[0], point[1]), textcoords="offset points", xytext=(0,10), ha='center')
-
-    plt.savefig("best_points.png")
+    best_100 = np.array(best_100)
+    best_200 = np.array(best_200)
+    best_300 = np.array(best_300)
+    plt.scatter(best_100[:, 0], best_100[:, 1], c='red', marker='+', s=100, label="Best 100")
+    plt.scatter(best_200[:, 0], best_200[:, 1], c='green', marker='o', s=100, label="Best 200")
+    plt.scatter(best_300[:, 0], best_300[:, 1], c='blue', marker='*', s=100, label="Best 300")
+    
+    plt.show()
 
 
     
