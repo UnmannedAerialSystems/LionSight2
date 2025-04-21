@@ -9,11 +9,13 @@ import os
 from collections import Counter
 
 # === CONFIG === #
-TRAIN_DIRECTORY = './train_p2'
+TRAIN_DIRECTORY = './train_data'
+VALIDATION_DIRECTORY = './validation_data'
 NUM_EPOCHS = 80
 BATCH_SIZE = 32
-MODEL_PATH = 'lion_sight_2_model.pth'  
+MODEL_PATH = ''  
 USE_GPU = torch.cuda.is_available()
+EXPORT_PATH = 'ls2_2-0.pth'
 # =============== #
 
 device = torch.device("cuda" if USE_GPU else "cpu")
@@ -29,6 +31,13 @@ model.classifier = nn.Sequential(
     nn.Linear(512, 1),
 )
 
+# unfreeze early layers for fine-tuning
+for param in model.features.parameters():
+    param.requires_grad = True
+
+for param in model.classifier.parameters():
+    param.requires_grad = True
+
 # === Load existing trained weights === #
 if os.path.exists(MODEL_PATH):
     print(f"Loading model weights from: {MODEL_PATH}")
@@ -38,12 +47,10 @@ else:
 
 model.to(device)
 
-# === Optional: Freeze feature extractor if you only want to train classifier === #
-# for param in model.features.parameters():
-#     param.requires_grad = False
-
 # === Set up optimizer === #
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+optimizer = optim.Adam(model.parameters(), lr=0.0001)
+scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
+criterion = nn.BCEWithLogitsLoss()
 
 # === Define transform === #
 transform = transforms.Compose([
@@ -54,50 +61,12 @@ transform = transforms.Compose([
                          std=[0.229, 0.224, 0.225])
 ])
 
-# === Load full dataset from a single directory === #
-full_dataset = datasets.ImageFolder(root=TRAIN_DIRECTORY, transform=transform)
-
-# === Split into train and validation subsets === #
-# Get image paths and labels
-samples = full_dataset.samples
-filepaths, labels = zip(*samples)
-
-train_idx, val_idx = train_test_split(
-    list(range(len(labels))),
-    stratify=labels,
-    test_size=0.2,
-)
-
-# Subset datasets
-train_dataset = Subset(full_dataset, train_idx)
-validation_dataset = Subset(full_dataset, val_idx)
-
-# === Account for class imbalance === #
-# Count class labels only in the training split
-train_targets = [full_dataset.samples[i][1] for i in train_dataset.indices]
-counts = Counter(train_targets)
-total = sum(counts.values())
-class_weights = [total / counts[i] for i in range(len(counts))]
-print(f"Class weights (based on training split): {class_weights}")
-
-weights_tensor = torch.tensor(class_weights, dtype=torch.float).to(device)
-criterion = nn.BCEWithLogitsLoss(pos_weight=weights_tensor[1])
-
-
-# Turn into tensor
-weights_tensor = torch.tensor(class_weights, dtype=torch.float).to(device)
-
-# Then use in your function:
-criterion = nn.BCEWithLogitsLoss(pos_weight=weights_tensor[1])  # Only applies to positive class
+train_dataset = datasets.ImageFolder(root=TRAIN_DIRECTORY, transform=transform)
+validation_dataset = datasets.ImageFolder(root=VALIDATION_DIRECTORY, transform=transform)
 
 # === Data loaders === #
 train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
 validation_loader = DataLoader(validation_dataset, batch_size=BATCH_SIZE, shuffle=False)
-
-# === Check split === #
-print(f"Train samples: {len(train_dataset)} | Validation samples: {len(validation_dataset)}")
-train_labels = [full_dataset.samples[i][1] for i in train_dataset.indices]
-print("Training set class counts:", Counter(train_labels))
 
 # === Training loop with KeyboardInterrupt handling === #
 try:
@@ -120,6 +89,7 @@ try:
             progress_bar.set_postfix(loss=(running_loss / len(train_loader)))
         
         print(f"Epoch [{epoch + 1}/{NUM_EPOCHS}], Loss: {running_loss / len(train_loader):.4f}")
+        scheduler.step()
 except KeyboardInterrupt:
     print("\nTraining interrupted. Saving current model state...")
     torch.save(model.state_dict(), 'lion_sight_2_model_interrupted.pth')
@@ -152,5 +122,5 @@ with torch.no_grad():
     print(f"Validation Loss: {epoch_loss:.4f}, Accuracy: {epoch_acc:.4f}")
 
 # === Save fine-tuned model === #
-torch.save(model.state_dict(), 'lion_sight_2_model_p2.pth')
-print("Fine-tuned model saved as lion_sight_2_model_p2.pth")
+torch.save(model.state_dict(), f'{EXPORT_PATH}')
+print(f"Model saved as {EXPORT_PATH}")

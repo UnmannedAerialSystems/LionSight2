@@ -4,6 +4,9 @@ import numpy as np
 import cv2
 from tqdm import tqdm # type: ignore
 import matplotlib.pyplot as plt
+from torchvision import transforms
+from PIL import Image
+import torch
 
 def prepare_directories():
     '''
@@ -135,6 +138,87 @@ def apply_motion_blur(image, kernel_size, angle):
     return blurred_image
 
 
+def apply_color_jitter(image, brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1):
+    '''
+    Apply color jitter to the image.
+    '''
+    transform = transforms.ColorJitter(
+        brightness=brightness,
+        contrast=contrast,
+        saturation=saturation,
+        hue=hue
+    )
+    return transform(image)
+
+
+def apply_gaussian_noise(image, std=10):
+    '''
+    Apply Gaussian noise to the image.
+    '''
+    np_image = np.array(image)
+    noise = np.random.normal(0, std, np_image.shape).astype(np_image.dtype)
+    noisy_image = np.clip(np_image + noise, 0, 255).astype(np.uint8)
+    return noisy_image
+
+
+def random_cutout(image):
+    '''
+    Apply random cutout to the image.
+    '''
+    transform = transforms.RandomErasing(p=0.5, scale=(0.02, 0.1), ratio=(0.3, 3.3))
+    return transform(image)
+
+
+def random_affine(image):
+    '''
+    Apply random perspective transformation to the image.
+    '''
+    transform = transforms.RandomAffine(degrees=10, translate=(0.1, 0.1), scale=(0.8, 1.2), shear=10)
+    return transform(image)
+
+
+
+def distortion_pipeline(image, seed):
+    # Set all random seeds
+    rd.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    # === Motion Blur ===
+    kernel_size = rd.randint(MOTION_BLUR_KERNEL_MIN, MOTION_BLUR_KERNEL_MAX)
+    angle = rd.uniform(0, 360)
+    image = apply_motion_blur(image, kernel_size, angle)  # np.ndarray
+
+    # === Convert to PIL for torchvision transforms ===
+    image = Image.fromarray(image)
+
+    # === Color Jitter ===
+    color_jitter = transforms.ColorJitter(
+        brightness=0.2,
+        contrast=0.2,
+        saturation=0.2,
+        hue=0.1
+    )
+    image = color_jitter(image)
+
+    # === Convert back to NumPy for noise ===
+    image = np.array(image)
+    image = apply_gaussian_noise(image)
+
+    # === Convert to tensor for cutout + affine ===
+    tensor_transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.RandomAffine(degrees=10, translate=(0.1, 0.1), scale=(0.8, 1.2), shear=10),
+        transforms.RandomErasing(p=0.5, scale=(0.02, 0.1), ratio=(0.3, 3.3))
+    ])
+    image_tensor = tensor_transform(Image.fromarray(image))
+
+    # Convert back to NumPy
+    image = (image_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+
+    return image
+
+
 def generate_training_data(num_samples):
     '''
     Generate training data by overlaying target images on background images.
@@ -156,19 +240,32 @@ def generate_training_data(num_samples):
         for file in background_files
     ]
 
-    i = 0
+    # Check if LAST_INDEX.txt exists
+    if not os.path.exists("LAST_INDEX.txt"):
+        with open("LAST_INDEX.txt", "w") as f:
+            f.write("0")
+
+    with open("LAST_INDEX.txt", "r") as f:
+        last_index = int(f.read().strip())
+    
+    if last_index:
+        i = last_index + 1
+        num_samples += last_index
+    else:
+        i = 0
+
     with tqdm(total=num_samples, desc="Generating Samples") as pbar:
         while i < num_samples:
             # Select a random target and background
             overlay_img = sample_target(target_images)
             background_img = sample_background(background_images, INPUT_SIZE[0], INPUT_SIZE[1])
 
-            # Select a random motion blur kernel size and angle
+            seed = rd.randint(0, 1000000)
+
+            #empty_img = distortion_pipeline(background_img, seed)
             kernel_size = rd.randint(MOTION_BLUR_KERNEL_MIN, MOTION_BLUR_KERNEL_MAX)
             angle = rd.uniform(0, 360)
-
-            # Apply motion blur to the background image
-            empty_img = apply_motion_blur(background_img.copy(), kernel_size, angle)
+            empty_img = apply_motion_blur(background_img, kernel_size, angle)  # np.ndarray
 
             export_sample(empty_img, i, 0)
             i += 1
@@ -221,7 +318,9 @@ def generate_training_data(num_samples):
             background_img[y_start:y_end, x_start:x_end, :3][alpha_mask] = overlay_img[overlay_y_start:overlay_y_end, overlay_x_start:overlay_x_end, :3][alpha_mask]
 
             # Apply motion blur to the image
+            #background_img = distortion_pipeline(background_img, seed)
             background_img = apply_motion_blur(background_img, kernel_size, angle)
+            
 
             # Save the image
             export_sample(background_img, i, 1)
@@ -229,6 +328,10 @@ def generate_training_data(num_samples):
             pbar.update(1)
 
     print(f'\nGenerated {num_samples} training samples.')
+
+    # Update the last index
+    with open("LAST_INDEX.txt", "w") as f:
+        f.write(str(i))
 
 
 TARGETS_DIRECTORY = './targets_2'
@@ -239,7 +342,7 @@ FALSE_DIRECTORY = 'no_object'
 
 # Parameters
 INPUT_SIZE = (512, 512)
-NUM_SAMPLES = 1000
+NUM_SAMPLES = 500
 MOTION_BLUR_KERNEL_MIN = 1
 MOTION_BLUR_KERNEL_MAX = 30
 OVERLAY_SCALE_MIN = 0.1

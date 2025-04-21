@@ -102,4 +102,4 @@ class LS2Network:
         # plt.axis("off")
         # plt.show()
         
-        return output.item()
+        return torch.sigmoid(output).item() # Return the probability score

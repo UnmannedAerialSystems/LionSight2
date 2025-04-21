@@ -1,12 +1,13 @@
 import torch
 import cv2
 import numpy as np
-from sklearn.cluster import MiniBatchKMeans # type: ignore
+from sklearn.cluster import DBSCAN # type: ignore
 from ls2_cluster_orb import ClusterORB
 from ls2_network import LS2Network
 import os
 from PIL import Image
 from tqdm import tqdm # type: ignore
+from collections import defaultdict
 
 class LionSight2:
 
@@ -129,25 +130,22 @@ class LionSight2:
                         # Crop the patch
                         crop = img[rel_y:rel_y+crop_size, rel_x:rel_x+crop_size]
                         self.net.img = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
-                        score = self.net.run_net()
+                        probability = self.net.run_net()
                         
-                        # if this should contain a true point
-                        for true_point in self.true_points:
-                            true_x, true_y = true_point
-                            if (x <= true_x < x + crop_size and
-                                y <= true_y < y + crop_size):
+                        # # if this should contain a true point
+                        # for true_point in self.true_points:
+                        #     true_x, true_y = true_point
+                        #     if (x <= true_x < x + crop_size and
+                        #         y <= true_y < y + crop_size):
                                 
-                                # display the crop with score
-                                cv2.imshow(f"{score}", crop)
-                                cv2.waitKey(0)
-                                cv2.destroyAllWindows()
+                        #         # display the crop with score
+                        #         cv2.imshow(f"{score}", crop)
+                        #         cv2.waitKey(0)
+                        #         cv2.destroyAllWindows()
 
-                        if score > 50:
-                            cv2.imshow(f"{score}", crop)
-                            cv2.waitKey(1)
-                            cv2.destroyAllWindows()
-
-                        results.append((x, y, score))
+                        square_center_x = x + crop_size // 2
+                        square_center_y = y + crop_size // 2
+                        results.append((square_center_x, square_center_y, probability))
                         break  # Only use one image per crop
 
                 progress_bar.update(1)
@@ -155,27 +153,47 @@ class LionSight2:
         return results
     
 
-    def get_nms(self, detections, distance_threshold=200, top_k=4):
+    def cluster_and_average(self, detections, top_k=4, eps=150, confidence_threshold=0.5):
         """
-        Apply Non-Maximum Suppression (NMS) to filter out overlapping detections.
+        Cluster detections using DBSCAN and return the average coordinates of the clusters.
         """
-        # Sort results by score
-        detections = sorted(detections, key=lambda x: x[2], reverse=True)
+        detections = [detection for detection in detections if detection[2] > confidence_threshold]
 
-        # Initialize a list to hold the final results
-        final_results = []
+        if not detections:
+            return []
 
-        while detections:
-            # Take the highest score detection
-            best = detections.pop(0)
-            final_results.append(best)
+        coords = np.array([[x, y] for x, y, _ in detections])
+        scores = np.array([score for _, _, score in detections])
 
-            detections = [
-                d for d in detections
-                if np.linalg.norm(np.array(d[:2]) - np.array(best[:2])) > distance_threshold
-            ]
+        db = DBSCAN(eps=eps, min_samples=2).fit(coords)
+        labels = db.labels_
+        # Display DBSCAN results
+        print("DBSCAN Results:")
+        for label in set(labels):
+            if label == -1:
+                print(f"Noise points: {sum(labels == -1)}")
+            else:
+                print(f"Cluster {label}: {sum(labels == label)} points")
 
-        return final_results[:top_k]
+        clusters = defaultdict(list)
+
+        for label, (x, y, score) in zip(labels, detections):
+            if label == -1:
+                continue  # Ignore noise points
+            clusters[label].append((x, y, score))
+        
+        cluster_averages = []
+
+        for cluster_points in clusters.values():
+            cluster_points = sorted(cluster_points, key=lambda x: x[2], reverse=True)
+            x, y, scores = zip(*cluster_points)
+            avg_x = np.mean(x)
+            avg_y = np.mean(y)
+            avg_score = np.mean(scores)
+
+            cluster_averages.append((avg_x, avg_y, avg_score))
+
+        return sorted(cluster_averages, key=lambda x: x[2], reverse=True)[:top_k]
 
 
 
@@ -184,9 +202,10 @@ def main():
     import sys
     import os
     from detect_zone_generator import Runway
+    import time
     import matplotlib.pyplot as plt
 
-    runway = Runway('./runway_smaller.png', height=800, y_offset=400, ratio=8, num_targets=4)
+    runway = Runway('./runway_smaller.png', height=800, y_offset=400, ratio=8, num_targets=8)
     runway.assign_targets()
     runway.apply_motion_blur()
     photos = runway.generate_photos(20)
@@ -200,41 +219,34 @@ def main():
         photo_path = os.path.join(output_dir, f"photo_{photo[1][0]},{photo[1][1]}_.png")
         cv2.imwrite(photo_path, photo_to_save)
 
+    # Start a timer
+    start_time = time.time()
     orb = ClusterORB(n_clusters=20, n_features=1024)
-    net = LS2Network("lion_sight_2_model.pth")
-    lion_sight = LionSight2(num_targets=4, net=net, orb=orb)
+    net = LS2Network("ls2_2-0.pth")
+    lion_sight = LionSight2(num_targets=8, net=net, orb=orb)
     lion_sight.true_points = runway.points
     lion_sight.load_images(output_dir)
     results = lion_sight.detect_dense()
-    best_100 = lion_sight.get_nms(results, distance_threshold=100, top_k=20)
-    best_200 = lion_sight.get_nms(results, distance_threshold=200, top_k=20)
-    best_300 = lion_sight.get_nms(results, distance_threshold=300, top_k=20)
+    best_points = lion_sight.cluster_and_average(results, top_k=8, eps=80)
 
-    # # Plot the cluster centers
-    # for center in centers:
-    #     plt.scatter(center[0], center[1], c='blue', marker='o', s=50, label="Cluster Center")
+    end_time = time.time()
 
-    # # get the best 4 predictions
-    # best_points = sorted(results, key=lambda x: x[2], reverse=True)[:4]
-    
     runway_img = runway.runway.copy()
 
     # Plot the runway image
     plt.imshow(cv2.cvtColor(runway_img, cv2.COLOR_BGR2RGB))
-    plt.title("Clustered Keypoints on Runway")
+    plt.title(f"Detected Points (in {end_time - start_time:.2f} seconds)")
 
     # Plot true target coordinates
     for i, target in enumerate(runway.points):
         plt.scatter(target[0], target[1], c='black', marker='x', label=f"Target {i+1}")
 
     # Plot best cluster centers
-    best_100 = np.array(best_100)
-    best_200 = np.array(best_200)
-    best_300 = np.array(best_300)
-    plt.scatter(best_100[:, 0], best_100[:, 1], c='red', marker='+', s=100, label="Best 100")
-    plt.scatter(best_200[:, 0], best_200[:, 1], c='green', marker='o', s=100, label="Best 200")
-    plt.scatter(best_300[:, 0], best_300[:, 1], c='blue', marker='*', s=100, label="Best 300")
+    best_points = np.array(best_points)
+    plt.scatter(best_points[:, 0], best_points[:, 1], c='red', marker='+', s=100, label="Best Points")
     
+    plt.legend()
+    plt.axis("off")
     plt.show()
 
 

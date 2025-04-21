@@ -12,11 +12,11 @@ from ls2_network import LS2Network
 from detect_zone_generator import Runway
 
 # ---- CONFIG ---- #
-MODEL_PATH = "lion_sight_2_model.pth"
+MODEL_PATH = "ls2_2-0.pth"
 TARGETS_DIRECTORY = "./targets_2"
 RUNWAY_IMAGE = "runway_smaller.png"
 CROP_SIZE = 224
-NUM_EPOCHS = 1000
+NUM_EPOCHS = 5
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 if DEVICE.type == "cuda":
@@ -34,7 +34,7 @@ transform = transforms.Compose([
                          std=[0.229, 0.224, 0.225])
 ])
 
-# === Load your trained model === #
+# === Load trained model === #
 from torchvision import models
 
 model = models.mobilenet_v2(pretrained=False)
@@ -113,7 +113,7 @@ for epoch in range(NUM_EPOCHS):
     # Test background points
     for i, pt in enumerate(bg_points):
         crop, prob,logit = crop_and_predict(runway.runway, pt)
-        if prob >= 0.5:
+        if prob:
             output_path = f"./train_p2/no_object/background_point_{yes_count}.png"
             #cv2.imwrite(output_path, cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))
             plt.imshow(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))

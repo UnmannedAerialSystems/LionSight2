@@ -66,7 +66,7 @@ class Runway:
             overlay_img = mpimg.imread(f'{TARGETS_DIRECTORY}/{target_file}')
 
             # Scale the overlay image to a maximum size of 200x200 while maintaining aspect ratio
-            max_size = 200
+            max_size = 100
             overlay_height, overlay_width, _ = overlay_img.shape
             scale_factor = min(max_size / overlay_width, max_size / overlay_height)
             new_width = int(overlay_width * scale_factor)
