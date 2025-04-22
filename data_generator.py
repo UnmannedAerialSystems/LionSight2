@@ -4,7 +4,7 @@ import numpy as np
 import cv2
 from tqdm import tqdm # type: ignore
 import matplotlib.pyplot as plt
-from torchvision import transforms
+from torchvision import transforms # type: ignore
 from PIL import Image
 import torch
 

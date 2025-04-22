@@ -8,6 +8,9 @@ import os
 from PIL import Image
 from tqdm import tqdm # type: ignore
 from collections import defaultdict
+from GPSLocator import geo_image
+from MAVez import Coordinate
+import math
 
 class LionSight2:
 
@@ -91,6 +94,27 @@ class LionSight2:
 
         return results, cluster_centers
     
+
+    def create_scan(self, stride, top_left_coord, top_right_coord, bottom_left_coord):
+        """
+        Create a scan of the area defined by the coordinates.
+        """
+        # Calculate the heading
+        lon1, lat1 = top_left_coord.lon, top_left_coord.lat
+        lon2, lat2 = bottom_left_coord.lon, bottom_left_coord.lat
+        lon1_rad = math.radians(lon1)
+        lat1_rad = math.radians(lat1)
+        lon2_rad = math.radians(lon2)
+        lat2_rad = math.radians(lat2)
+
+        delta_lon = lon2_rad - lon1_rad
+
+        x = math.cos(lat2_rad) * math.sin(delta_lon)
+        y = math.cos(lat1_rad) * math.sin(lat2_rad) - (math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(delta_lon))
+        heading = math.atan2(x, y)
+        heading = math.degrees(heading)
+        return heading
+
 
     def detect_dense(self, stride=32, crop_size=224):
         """
@@ -253,7 +277,14 @@ def main():
     
 
 if __name__ == "__main__":
-    main()
+    ls2 = LionSight2(num_targets=8, net=None, orb=None)
+
+    top_left = Coordinate(0, 0)
+    top_right = Coordinate(0, 100)
+    bottom_left = Coordinate(100, 0)
+    bottom_right = Coordinate(100, 100)
+
+    ls2.create_scan()
 
 
 
