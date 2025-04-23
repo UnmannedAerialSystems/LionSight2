@@ -8,36 +8,78 @@ import os
 from PIL import Image
 from tqdm import tqdm # type: ignore
 from collections import defaultdict
+import sys
+sys.path.append("../")
 from GPSLocator import geo_image
 from MAVez import Coordinate
 import math
 
+# CAMERA PARAMETERS (Raspi AI Camera)
+X_RES = 2028
+Y_RES = 1520
+SENSOR_WIDTH = 6.2868
+SENSOR_HEIGHT = 4.712
+FOCAL_LENGTH = 3.863
+
 class LionSight2:
 
-    def __init__(self, num_targets, net, orb):
+    def __init__(self, entry_coord, exit_coord, width, stride, num_targets=4, crop_size=224):
+        '''
+        num_targets: number of targets to detect
+        entry_coord: Coordinate of the entry point (must be on the left side of the runway)
+        exit_coord: Coordinate of the exit point (must be on the right side of the runway)
+        width: width of the runway in meters
+        stride: stride of the scan in meters
+        crop_size: size of the crop in pixels
+        '''
         self.num_targets = num_targets
-        self.orb = orb
-        self.net = net
+        self.net = LS2Network("ls2_2-0.pth")
         self.images = None
-        self.true_points = None
+        self.stride = stride
+        self.entry = entry_coord
+        self.exit = exit_coord
+        self.length = entry_coord.distance_to(exit_coord)
+        self.width = width
+        self.bearing = entry_coord.bearing_to(exit_coord)
+        self.cross_bearing = (self.bearing + 90) % 360
+        self.next_position = None
+        self.horizontal_shift = 0
+        self.vertical_shift = 0
+        self.crop_size = crop_size
     
 
     def load_images(self, images_directory):
         '''
         Load images from the specified path.
         '''
-        image_names = [filename for filename in os.listdir(images_directory) if filename.endswith(".png")]
+
         images = []
-        for filename in image_names:
-            image = cv2.imread(os.path.join(images_directory, filename))
-            if image is not None:
-                image_coords = filename.split('_')[1]
-                image_coords = tuple(image_coords.strip('()').split(','))
-                image_coords = (int(image_coords[0]), int(image_coords[1]))
-                image = (image, image_coords)
-                images.append(image)
-            else:
-                print(f"Error loading image: {filename}")
+
+        with open(os.path.join(images_directory, "image_data.txt"), 'r') as f:
+            lines = f.readlines()
+            for line in lines:
+                parts = line.strip().split(',')
+                filename = parts[0]
+                lat = float(parts[1])
+                lon = float(parts[2])
+                alt = float(parts[3])
+                heading = float(parts[4])
+
+                # create a geo_image object
+                geo_img = geo_image.GeoImage(image_path=os.path.join(images_directory, filename),
+                                                latitude=lat, longitude=lon, altitude=alt,
+                                                roll=0, pitch=0, heading=heading,
+                                                res_x=X_RES, res_y=Y_RES,
+                                                focal_length=FOCAL_LENGTH,
+                                                sensor_width=SENSOR_WIDTH,
+                                                sensor_height=SENSOR_HEIGHT)
+
+                # verify the image was loaded correctly
+                if geo_img.image is not None:
+                    images.append(geo_image)
+                else:
+                    print(f"Error loading image: {filename}")
+
         self.images = images
 
     
@@ -95,28 +137,78 @@ class LionSight2:
         return results, cluster_centers
     
 
-    def create_scan(self, stride, top_left_coord, top_right_coord, bottom_left_coord):
+    def next_stride(self):
+        '''
+        Calculate the next stride based on the current position and the bearing.
+        '''
+
+        # check if this is the first step
+        if self.next_position is None:
+            # set the next position to the entry coordinate
+            self.next_position = self.entry
+            self.horizontal_shift = 0
+            self.vertical_shift = 0
+            return 1
+
+        # increment horizontal shift
+        self.horizontal_shift += self.stride
+
+        # check if we need to move to the next row
+        if self.horizontal_shift >= self.length:
+            self.horizontal_shift = 0
+            self.vertical_shift += self.stride
+        
+        # check if we have done all rows
+        if self.vertical_shift >= self.width:
+            return -1
+        
+        # calculate the next position
+        across = self.entry.offset_coordinate(self.horizontal_shift, self.bearing)
+        down = across.offset_coordinate(self.vertical_shift, self.cross_bearing)
+        self.next_position = down
+
+        return 1
+
+
+    def detect_dense(self):
         """
-        Create a scan of the area defined by the coordinates.
+        Densely scan the entire stitched area, score with the network, and return top-K detections.
         """
-        # Calculate the heading
-        lon1, lat1 = top_left_coord.lon, top_left_coord.lat
-        lon2, lat2 = bottom_left_coord.lon, bottom_left_coord.lat
-        lon1_rad = math.radians(lon1)
-        lat1_rad = math.radians(lat1)
-        lon2_rad = math.radians(lon2)
-        lat2_rad = math.radians(lat2)
 
-        delta_lon = lon2_rad - lon1_rad
+        results = []
 
-        x = math.cos(lat2_rad) * math.sin(delta_lon)
-        y = math.cos(lat1_rad) * math.sin(lat2_rad) - (math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(delta_lon))
-        heading = math.atan2(x, y)
-        heading = math.degrees(heading)
-        return heading
+        while self.next_stride() != -1:
+
+            # Check which image contains this point
+            for img in self.images:
+
+                if self.next_position in img:
+
+                    # get the pixel within the image representing the center of the crop
+                    img_x, img_y = img.get_pixels(self.next_position)
+                    img_h, img_w = img.shape[:2]
+
+                    # Check if the point is within the image bounds
+                    half_crop = self.crop_size // 2
+                    if (img_x - half_crop >= 0 and img_x + half_crop < img_w and 
+                        img_y - half_crop >= 0 and img_y + half_crop < img_h):
+
+                        # Crop the patch centered at (img_x, img_y)
+                        crop = img[img_y - half_crop:img_y + half_crop, img_x - half_crop:img_x + half_crop]
+                        self.net.img = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
+                        probability = self.net.run_net()
+
+                        results.append((self.next_position.lat, self.next_position.lon, probability))
+                        break  # Only use one image per crop
+
+        return results
 
 
-    def detect_dense(self, stride=32, crop_size=224):
+
+
+
+
+    def detect_dense_test(self, stride=32, crop_size=224):
         """
         Densely scan the entire stitched area, score with the network, and return top-K detections.
         """
@@ -277,14 +369,15 @@ def main():
     
 
 if __name__ == "__main__":
+    #main()
     ls2 = LionSight2(num_targets=8, net=None, orb=None)
 
-    top_left = Coordinate(0, 0)
-    top_right = Coordinate(0, 100)
-    bottom_left = Coordinate(100, 0)
-    bottom_right = Coordinate(100, 100)
+    #entry_right = Coordinate(40.83876299581302, -77.69662830390997, 0, use_int=False)
+    exit_left = Coordinate(40.8384731782018, -77.69629742263656, 0, use_int=False)
+    entry_left = Coordinate(40.83877324538863, -77.69660765100548, 0, use_int=False)
+    entry_right = Coordinate(40.8387558839284, -77.69664058194027, 0, use_int=False)
 
-    ls2.create_scan()
+    print(ls2.create_scan(5, entry_left, entry_right, exit_left))
 
 
 
