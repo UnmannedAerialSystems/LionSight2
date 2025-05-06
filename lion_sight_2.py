@@ -10,7 +10,7 @@ from tqdm import tqdm # type: ignore
 from collections import defaultdict
 import sys
 sys.path.append("../")
-from GPSLocator import geo_image
+from GPSLocator.geo_image import GeoImage
 from MAVez import Coordinate
 import math
 
@@ -23,7 +23,7 @@ FOCAL_LENGTH = 3.863
 
 class LionSight2:
 
-    def __init__(self, entry_coord, exit_coord, width, stride, num_targets=4, crop_size=224):
+    def __init__(self, entry_coord, exit_coord, width, stride, net, num_targets=4, crop_size=224):
         '''
         num_targets: number of targets to detect
         entry_coord: Coordinate of the entry point (must be on the left side of the runway)
@@ -46,6 +46,7 @@ class LionSight2:
         self.horizontal_shift = 0
         self.vertical_shift = 0
         self.crop_size = crop_size
+        self.net = net
     
 
     def load_images(self, images_directory):
@@ -66,7 +67,7 @@ class LionSight2:
                 heading = float(parts[4])
 
                 # create a geo_image object
-                geo_img = geo_image.GeoImage(image_path=os.path.join(images_directory, filename),
+                geo_img = GeoImage.GeoImage(image_path=os.path.join(images_directory, filename),
                                                 latitude=lat, longitude=lon, altitude=alt,
                                                 roll=0, pitch=0, heading=heading,
                                                 res_x=X_RES, res_y=Y_RES,
@@ -76,7 +77,7 @@ class LionSight2:
 
                 # verify the image was loaded correctly
                 if geo_img.image is not None:
-                    images.append(geo_image)
+                    images.append(geo_img)
                 else:
                     print(f"Error loading image: {filename}")
 
@@ -317,67 +318,41 @@ def main():
 
     import sys
     import os
-    from detect_zone_generator import Runway
     import time
     import matplotlib.pyplot as plt
-
-    runway = Runway('./runway_smaller.png', height=800, y_offset=400, ratio=8, num_targets=8)
-    runway.assign_targets()
-    runway.apply_motion_blur()
-    photos = runway.generate_photos(20)
-
-    # Create a directory to save photos if it doesn't exist
-    output_dir = "test_photos"
-    os.makedirs(output_dir, exist_ok=True)
-    # Save the generated photos to the directory
-    for i, photo in enumerate(photos):
-        photo_to_save = (photo[0] * 255).astype(np.uint8) if photo[0].dtype != np.uint8 else photo[0]
-        photo_path = os.path.join(output_dir, f"photo_{photo[1][0]},{photo[1][1]}_.png")
-        cv2.imwrite(photo_path, photo_to_save)
+    from GPSLocator import coord_generator
 
     # Start a timer
+    print("\n==================================")
     start_time = time.time()
-    orb = ClusterORB(n_clusters=20, n_features=1024)
+
+    entry_point = Coordinate(38.315509271316046, -76.55080562662074, 0, use_int=False)
+    exit_point = Coordinate(38.3157407480423, -76.55194738196501, 0, use_int=False)
+
     net = LS2Network("ls2_2-0.pth")
-    lion_sight = LionSight2(num_targets=8, net=net, orb=orb)
-    lion_sight.true_points = runway.points
-    lion_sight.load_images(output_dir)
+    lion_sight = LionSight2(entry_coord=entry_point, 
+                            exit_coord=exit_point, 
+                            width=30, 
+                            stride=5, 
+                            net=net,
+                            num_targets=4, 
+                            crop_size=224)
+
+    lion_sight.images = coord_generator.generate_geo_images()
+
     results = lion_sight.detect_dense()
     best_points = lion_sight.cluster_and_average(results, top_k=8, eps=80)
-
     end_time = time.time()
+    for point in best_points:
+        print(f"Point: {point[0]}, {point[1]}, Score: {point[2]}")
+    print(f"\nTime taken: {end_time - start_time} seconds\n==================================")
 
-    runway_img = runway.runway.copy()
-
-    # Plot the runway image
-    plt.imshow(cv2.cvtColor(runway_img, cv2.COLOR_BGR2RGB))
-    plt.title(f"Detected Points (in {end_time - start_time:.2f} seconds)")
-
-    # Plot true target coordinates
-    for i, target in enumerate(runway.points):
-        plt.scatter(target[0], target[1], c='black', marker='x', label=f"Target {i+1}")
-
-    # Plot best cluster centers
-    best_points = np.array(best_points)
-    plt.scatter(best_points[:, 0], best_points[:, 1], c='red', marker='+', s=100, label="Best Points")
-    
-    plt.legend()
-    plt.axis("off")
-    plt.show()
 
 
     
 
 if __name__ == "__main__":
-    #main()
-    ls2 = LionSight2(num_targets=8, net=None, orb=None)
-
-    #entry_right = Coordinate(40.83876299581302, -77.69662830390997, 0, use_int=False)
-    exit_left = Coordinate(40.8384731782018, -77.69629742263656, 0, use_int=False)
-    entry_left = Coordinate(40.83877324538863, -77.69660765100548, 0, use_int=False)
-    entry_right = Coordinate(40.8387558839284, -77.69664058194027, 0, use_int=False)
-
-    print(ls2.create_scan(5, entry_left, entry_right, exit_left))
+    main()
 
 
 
