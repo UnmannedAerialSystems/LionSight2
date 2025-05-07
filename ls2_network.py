@@ -31,9 +31,9 @@ class LS2Network:
         if net_path is None:
             return None
 
-        # Define the model architecture (e.g., MobileNetV2, ResNet18, etc.)
+        # Define the model architecture
         from torchvision import models
-        self.net = models.mobilenet_v2(pretrained=True)  # Replace with your model architecture
+        self.net = models.mobilenet_v2(pretrained=True)
         self.net.classifier = torch.nn.Sequential(
             torch.nn.Linear(self.net.last_channel, 512),
             torch.nn.ReLU(),
