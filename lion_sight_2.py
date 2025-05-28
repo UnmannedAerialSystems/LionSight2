@@ -2,8 +2,7 @@ import torch
 import cv2
 import numpy as np
 from sklearn.cluster import DBSCAN # type: ignore
-from ls2_cluster_orb import ClusterORB
-from ls2_network import LS2Network
+from .ls2_network import LS2Network
 import os
 from PIL import Image
 from tqdm import tqdm # type: ignore

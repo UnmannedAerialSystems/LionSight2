@@ -131,15 +131,14 @@ class Runway:
 TARGETS_DIRECTORY = './targets_2'
 
 def main():
-    runway = Runway("runway_smaller.png", height=800, y_offset=400, ratio=8, num_targets=4)
+    runway = Runway("runway_xl.png", height=1764, y_offset=700, ratio=8, num_targets=4)
     runway.assign_targets()
     runway.apply_motion_blur()
-    photos = runway.generate_photos(5)
+    photos = runway.generate_photos(20, width=3040, height=4056, y=0)
 
     for i, photo in enumerate(photos):
-        plt.imshow(photo[0])
-        plt.title(f"Photo {i + 1}, Center: {photo[1]}")
-        plt.show()
+        print(f"Saving emulated image {i} at coordinates {photo[1]}")
+        plt.imsave(f'../UASCamera2/emulator_photos/emulated_image_{i}.png', photo[0])
 
 
 if __name__ == '__main__':
