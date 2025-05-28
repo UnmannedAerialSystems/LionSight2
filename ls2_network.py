@@ -5,16 +5,21 @@ from PIL import Image
 
 class LS2Network:
 
-    def __init__(self, net_path):
+    def __init__(self, net_path, logger=None):
         """
         Initialize the LS2Network with the specified model path.
         """
 
+        self.logger = logger
+
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
+            if self.logger:
+                self.logger.info("[LS2] CUDA is available. Using GPU.")
         else:
-            print("CUDA is not available. Using CPU.")
             self.device = torch.device("cpu")
+            if self.logger:
+                self.logger.info("[LS2] CUDA is not available. Using CPU.")
 
 
         self.net_path = net_path
@@ -44,8 +49,8 @@ class LS2Network:
         # Load the state dictionary
         state_dict = torch.load(net_path, map_location=self.device)
         self.net.load_state_dict(state_dict)
-        print(f"Loaded network from {net_path}")
-
+        if self.logger:
+            self.logger.info(f"[LS2] Loaded model from {net_path}")
     
     def crop_to_poi(self, image, poi, size):
         """
@@ -75,7 +80,9 @@ class LS2Network:
         Run the neural network on the cropped image.
         """
         if self.img is None:
-            raise ValueError("Image not set. Please set the image before running the network.")
+            if self.logger:
+                self.logger.error("[LS2] No image has been set for processing.")
+            return None
         
         # Define transform to match expected input
         transform = transforms.Compose([
@@ -94,12 +101,7 @@ class LS2Network:
         with torch.no_grad():
             output = self.net(img_tensor)
 
-        # Display the image being processed (optional, for debugging purposes)
-        import matplotlib.pyplot as plt
-
-        # plt.imshow(self.img)
-        # plt.title(output.item())
-        # plt.axis("off")
-        # plt.show()
+        if self.logger:
+            self.logger.info(f"[LS2] Network output: {output.item()}")
         
         return torch.sigmoid(output).item() # Return the probability score

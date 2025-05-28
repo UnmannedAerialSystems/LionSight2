@@ -1,16 +1,16 @@
+import sys
+sys.path.append("../")
 import torch
 import cv2
 import numpy as np
 from sklearn.cluster import DBSCAN # type: ignore
-from .ls2_network import LS2Network
+from LionSight2.ls2_network import LS2Network
 import os
 from PIL import Image
 from tqdm import tqdm # type: ignore
 from collections import defaultdict
-import sys
-sys.path.append("../")
 from GPSLocator.geo_image import GeoImage
-from MAVez import Coordinate
+from MAVez.Coordinate import Coordinate
 import math
 
 # CAMERA PARAMETERS (Raspi AI Camera)
@@ -20,9 +20,30 @@ SENSOR_WIDTH = 6.2868
 SENSOR_HEIGHT = 4.712
 FOCAL_LENGTH = 3.863
 
+def get_ls2(stride=5, num_targets=4, crop_size=224, logger=None, block_emulator=False):
+    '''
+    Create a LionSight2 object with the specified parameters.
+    entry_coord: Coordinate of the entry point (must be on the left side of the runway)
+    exit_coord: Coordinate of the exit point (must be on the right side of the runway)
+    width: width of the runway in meters
+    stride: stride of the scan in meters
+    crop_size: size of the crop in pixels
+    '''
+
+    try:
+        from picamera2 import Picamera2
+        return LionSight2(stride, num_targets, crop_size, logger)
+    except ImportError:
+        if not block_emulator:
+            from LionSight2.ls2_emulator import LionSight2
+            if logger:
+                logger.warning("[LionSight2] Picamera2 not available, using emulator.")
+            return LionSight2(stride, num_targets, crop_size, logger)
+        return LionSight2(stride, num_targets, crop_size, logger)
+
 class LionSight2:
 
-    def __init__(self, entry_coord, exit_coord, width, stride, net, num_targets=4, crop_size=224):
+    def __init__(self, stride, num_targets=4, crop_size=224, logger=None):
         '''
         num_targets: number of targets to detect
         entry_coord: Coordinate of the entry point (must be on the left side of the runway)
@@ -32,21 +53,36 @@ class LionSight2:
         crop_size: size of the crop in pixels
         '''
         self.num_targets = num_targets
-        self.net = LS2Network("ls2_2-0.pth")
+        self.logger = logger
+        self.net = LS2Network("ls2_2-0.pth", logger=logger)
         self.images = None
         self.stride = stride
+        self.next_position = None
+        self.horizontal_shift = 0
+        self.vertical_shift = 0
+        self.crop_size = crop_size
+        self.entry = None
+        self.exit = None
+        self.length = None
+        self.width = None
+        self.bearing = None
+        self.cross_bearing = None
+    
+
+    def set_plan(self, entry_coord, exit_coord, width):
+        '''
+        Set the entry and exit coordinates and width of the runway.
+        This will reset the next position and horizontal/vertical shifts.
+        '''
+
         self.entry = entry_coord
         self.exit = exit_coord
         self.length = entry_coord.distance_to(exit_coord)
         self.width = width
         self.bearing = entry_coord.bearing_to(exit_coord)
         self.cross_bearing = (self.bearing + 90) % 360
-        self.next_position = None
-        self.horizontal_shift = 0
-        self.vertical_shift = 0
-        self.crop_size = crop_size
-        self.net = net
-    
+        if self.logger:
+            self.logger.info(f"[LionSight2] Plan set: Entry {entry_coord}, Exit {exit_coord}, Width {width}m, Bearing {self.bearing}°")
 
     def load_images(self, images_directory):
         '''
@@ -82,8 +118,8 @@ class LionSight2:
 
         self.images = images
 
-    
-    def detect(self):
+    # DEPRECATED: Use detect instead
+    def detect_orb(self):
         '''
         Detect objects in the images using the neural network and ORB feature detector.
         '''
@@ -266,14 +302,14 @@ class LionSight2:
 
                 progress_bar.update(1)
 
-        return results
+        self.detections = results
     
 
-    def cluster_and_average(self, detections, top_k=4, eps=150, confidence_threshold=0.5):
+    def cluster_and_average(self, top_k=4, eps=150, confidence_threshold=0.5):
         """
         Cluster detections using DBSCAN and return the average coordinates of the clusters.
         """
-        detections = [detection for detection in detections if detection[2] > confidence_threshold]
+        detections = [detection for detection in self.detections if detection[2] > confidence_threshold]
 
         if not detections:
             return []
@@ -312,6 +348,20 @@ class LionSight2:
         return sorted(cluster_averages, key=lambda x: x[2], reverse=True)[:top_k]
 
 
+    def detect(self, top_k=4, eps=150, confidence_threshold=0.5):
+        """
+        Perform dense detection, clustering, and averaging of results.
+        Returns the top-k averaged coordinates with their scores.
+        """
+
+        if self.entry is None or self.exit is None or self.width is None:
+            if self.logger:
+                self.logger.error("[LionSight2] Entry, exit, or width not set. Please set the plan before detection.")
+            return []
+
+        self.detect_dense_test(stride=self.stride, crop_size=self.crop_size)
+        return self.cluster_and_average(top_k=top_k, eps=eps, confidence_threshold=confidence_threshold)
+
 
 def main():
 
@@ -328,12 +378,10 @@ def main():
     entry_point = Coordinate(38.315509271316046, -76.55080562662074, 0, use_int=False)
     exit_point = Coordinate(38.3157407480423, -76.55194738196501, 0, use_int=False)
 
-    net = LS2Network("ls2_2-0.pth")
     lion_sight = LionSight2(entry_coord=entry_point, 
                             exit_coord=exit_point, 
                             width=30, 
                             stride=5, 
-                            net=net,
                             num_targets=4, 
                             crop_size=224)
 
@@ -347,11 +395,35 @@ def main():
     print(f"\nTime taken: {end_time - start_time} seconds\n==================================")
 
 
+def main2():
+    entry_coord = Coordinate(40.84181406869122,-77.6975985677159,0, use_int=False)
+    exit_coord = Coordinate(40.8410979035657,-77.69898679735358,0, use_int=False)
 
+    ls2 = get_ls2(
+        entry_coord=entry_coord, 
+        exit_coord=exit_coord, 
+        width=30, 
+        stride=5, 
+        num_targets=4, 
+        crop_size=224
+    )
+
+    targets = ls2.detect()
+
+    import matplotlib.pyplot as plt
+    for target in targets:
+        plt.scatter(target.lon, target.lat, label=f'Target at {target}')
+    plt.scatter(entry_coord.lon, entry_coord.lat, color='green', label='Entry Point')
+    plt.scatter(exit_coord.lon, exit_coord.lat, color='red', label='Exit Point')
+    plt.xlabel('Longitude')
+    plt.ylabel('Latitude')
+    plt.title('Detected Targets along the Runway')
+    plt.grid()
+    plt.show()
     
 
 if __name__ == "__main__":
-    main()
+    main2()
 
 
 
