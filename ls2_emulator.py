@@ -15,7 +15,7 @@ from MAVez.Coordinate import Coordinate
 
 class LionSight2:
 
-    def __init__(self, stride, num_targets=4, crop_size=224):
+    def __init__(self, stride, num_targets=4, crop_size=224, logger=None):
         '''
         num_targets: number of targets to detect
         entry_coord: Coordinate of the entry point (must be on the left side of the runway)
@@ -38,6 +38,7 @@ class LionSight2:
         self.width = None
         self.bearing = None
         self.cross_bearing = None
+        self.logger = logger
 
     def set_plan(self, entry_coord, exit_coord, width):
         '''
