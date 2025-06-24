@@ -20,27 +20,6 @@ SENSOR_WIDTH = 6.2868
 SENSOR_HEIGHT = 4.712
 FOCAL_LENGTH = 3.863
 
-def get_ls2(stride=5, num_targets=4, crop_size=224, logger=None, block_emulator=False):
-    '''
-    Create a LionSight2 object with the specified parameters.
-    entry_coord: Coordinate of the entry point (must be on the left side of the runway)
-    exit_coord: Coordinate of the exit point (must be on the right side of the runway)
-    width: width of the runway in meters
-    stride: stride of the scan in meters
-    crop_size: size of the crop in pixels
-    '''
-
-    try:
-        from picamera2 import Picamera2
-        return LionSight2(stride, num_targets, crop_size, logger)
-    except ImportError:
-        if not block_emulator:
-            from LionSight2.ls2_emulator import LionSight2
-            if logger:
-                logger.warning("[LionSight2] Picamera2 not available, using emulator.")
-            return LionSight2(stride, num_targets, crop_size, logger)
-        return LionSight2(stride, num_targets, crop_size, logger)
-
 class LionSight2:
 
     def __init__(self, stride, num_targets=4, crop_size=224, logger=None):
@@ -361,6 +340,28 @@ class LionSight2:
 
         self.detect_dense_test(stride=self.stride, crop_size=self.crop_size)
         return self.cluster_and_average(top_k=top_k, eps=eps, confidence_threshold=confidence_threshold)
+
+
+def get_ls2(stride=5, num_targets=4, crop_size=224, logger=None, block_emulator=False):
+    '''
+    Create a LionSight2 object with the specified parameters.
+    entry_coord: Coordinate of the entry point (must be on the left side of the runway)
+    exit_coord: Coordinate of the exit point (must be on the right side of the runway)
+    width: width of the runway in meters
+    stride: stride of the scan in meters
+    crop_size: size of the crop in pixels
+    '''
+
+    try:
+        from picamera2 import Picamera2
+        return LionSight2(stride, num_targets, crop_size, logger)
+    except ImportError:
+        if not block_emulator:
+            from . import ls2_emulator
+            if logger:
+                logger.warning("[LionSight2] Picamera2 not available, using emulator.")
+            return ls2_emulator.LionSight2(stride, num_targets, crop_size, logger)
+        return LionSight2(stride, num_targets, crop_size, logger)
 
 
 def main():
