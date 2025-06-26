@@ -189,19 +189,19 @@ class LionSight2:
         """
         Densely scan the entire stitched area, score with the network, and return top-K detections.
         """
-        print(f"[LionSight2] Starting dense detection with stride {self.stride}m and crop size {self.crop_size}px")
-        results = []
+        if self.logger:
+            self.logger.info("[LionSight2] Starting dense detection...")
 
         while self.next_stride() != -1:
 
             # Check which image contains this point
-            for img in self.images:
+            for geo_image in self.images:
 
-                if self.next_position in img:
+                if self.next_position in geo_image:
   
                     # get the pixel within the image representing the center of the crop
-                    img_x, img_y = img.get_pixels(self.next_position)
-                    img_h, img_w = img.shape[:2]
+                    img_x, img_y = geo_image.get_pixels(self.next_position)
+                    img_h, img_w = geo_image.image.shape[:2]
 
                     # Check if the point is within the image bounds
                     half_crop = self.crop_size // 2
@@ -209,77 +209,21 @@ class LionSight2:
                         img_y - half_crop >= 0 and img_y + half_crop < img_h):
 
                         # Crop the patch centered at (img_x, img_y)
-                        crop = img.image[img_y - half_crop:img_y + half_crop, img_x - half_crop:img_x + half_crop]
+                        crop = geo_image.image[img_y - half_crop:img_y + half_crop, img_x - half_crop:img_x + half_crop]
                         self.net.img = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
                         probability = self.net.run_net()
-
-                        self.detections.append((self.next_position.lat, self.next_position.lon, probability))
-                        break  # Only use one image per crop
-                
-        print(f"[LionSight2] Dense detection completed. Found {len(self.detections)} detections.")
-
-
-
-
-
-
-    def detect_dense_test(self, stride=32, crop_size=224):
-        """
-        Densely scan the entire stitched area, score with the network, and return top-K detections.
-        """
-        # Determine full bounds of stitched image
-        min_x = min(img[1][0] for img in self.images)
-        min_y = min(img[1][1] for img in self.images)
-        max_x = max(img[1][0] + img[0].shape[1] for img in self.images)
-        max_y = max(img[1][1] + img[0].shape[0] for img in self.images)
-
-        stitched_width = max_x - min_x
-        stitched_height = max_y - min_y
-
-        print(f"Stitched image size: {stitched_width} x {stitched_height}")
-
-        total_positions = ((max_y - min_y - crop_size) // stride) * ((max_x - min_x - crop_size) // stride)
-        progress_bar = tqdm(total=total_positions, desc="Dense CNN Scan")
-
-        for y in range(min_y, max_y - crop_size, stride):
-            for x in range(min_x, max_x - crop_size, stride):
-
-                # Find which image contains this patch
-                for img, origin in self.images:
-                    img_x, img_y = origin
-                    img_h, img_w = img.shape[:2]
-
-                    # Does this image cover the crop?
-                    if (img_x <= x < img_x + img_w - crop_size and
-                        img_y <= y < img_y + img_h - crop_size):
-                        print("HERE")
-                        rel_x = x - img_x
-                        rel_y = y - img_y
-
-                        # Crop the patch
-                        crop = img[rel_y:rel_y+crop_size, rel_x:rel_x+crop_size]
-                        self.net.img = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
-                        probability = self.net.run_net()
-                        
-                        # # if this should contain a true point
-                        # for true_point in self.true_points:
-                        #     true_x, true_y = true_point
-                        #     if (x <= true_x < x + crop_size and
-                        #         y <= true_y < y + crop_size):
-                                
-                        #         # display the crop with score
-                        #         cv2.imshow(f"{score}", crop)
-                        #         cv2.waitKey(0)
-                        #         cv2.destroyAllWindows()
-
-                        square_center_x = x + crop_size // 2
-                        square_center_y = y + crop_size // 2
-                        results.append((square_center_x, square_center_y, probability))
+                        if self.logger:
+                            self.logger.info(f"[LionSight2] Detected at {self.next_position} with probability {probability:.4f}")
+                        self.detections.append((Coordinate(self.next_position.lat * 1e7, 
+                                                           self.next_position.lon * 1e7, 
+                                                           alt=0,
+                                                           use_int=True), 
+                                                probability))
                         break  # Only use one image per crop
 
-                progress_bar.update(1)
+        if self.logger:
+            self.logger.info(f"[LionSight2] Dense detection completed. Found {len(self.detections)} detections.")
 
-        self.detections = results
     
 
     def cluster_and_average(self, top_k=4, eps=150, confidence_threshold=0.5):
@@ -326,23 +270,31 @@ class LionSight2:
         return sorted(cluster_averages, key=lambda x: x[2], reverse=True)[:top_k]
 
 
-    def detect(self, top_k=4, eps=150, confidence_threshold=0.5):
+    def detect(self, top_k=4):
         """
         Perform dense detection, clustering, and averaging of results.
         Returns the top-k averaged coordinates with their scores.
         """
-
+        if self.logger:
+            self.logger.info("[LionSight2] Starting detection process...")
         if self.entry is None or self.exit is None or self.width is None:
             if self.logger:
                 self.logger.error("[LionSight2] Entry, exit, or width not set. Please set the plan before detection.")
             return []
 
+        if self.logger:
+            self.logger.info(f"[LionSight2] Detecting with stride {self.stride}m and crop size {self.crop_size}px")
         self.detect_dense_test(stride=self.stride, crop_size=self.crop_size)
-        return self.cluster_and_average(top_k=top_k, eps=eps, confidence_threshold=confidence_threshold)
+        if self.logger:
+            self.logger.info(f"[LionSight2] Getting best points...")
+        best = self.get_best_points(num_points=top_k)
+        if self.logger:
+            self.logger.info(f"[LionSight2] Best points: {best}")
+        return best
 
 
     def get_best_points(self, num_points=4):
-        return sorted(self.detections, key=lambda x: x[2])[-num_points:]
+        return sorted(self.detections, key=lambda x: x[1])[-num_points:]
     
 def get_ls2(stride=5, num_targets=4, crop_size=224, logger=None, block_emulator=False):
     '''
