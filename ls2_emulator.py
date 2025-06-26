@@ -74,7 +74,7 @@ class LionSight2:
             current_position = current_position.offset_coordinate(rd.uniform(-self.width/1.5, self.width/1.5), self.cross_bearing)
             fake_targets.append(current_position)
         
-        return fake_targets
+        return [Coordinate(38.29836481517422,-76.63925025388198, 0)] * 4
 
 
 def main():

@@ -38,7 +38,7 @@ class LS2Network:
 
         # Define the model architecture
         from torchvision import models
-        self.net = models.mobilenet_v2(pretrained=True)
+        self.net = models.mobilenet_v2(pretrained=False)
         self.net.classifier = torch.nn.Sequential(
             torch.nn.Linear(self.net.last_channel, 512),
             torch.nn.ReLU(),

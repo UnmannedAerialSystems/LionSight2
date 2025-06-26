@@ -1,11 +1,11 @@
 import sys
-sys.path.append("../")
+import os
+sys.path.append(os.path.dirname(__file__) + "/..")
 import torch
 import cv2
 import numpy as np
 from sklearn.cluster import DBSCAN # type: ignore
 from LionSight2.ls2_network import LS2Network
-import os
 from PIL import Image
 from tqdm import tqdm # type: ignore
 from collections import defaultdict
@@ -33,7 +33,7 @@ class LionSight2:
         '''
         self.num_targets = num_targets
         self.logger = logger
-        self.net = LS2Network("ls2_2-0.pth", logger=logger)
+        self.net = LS2Network(os.path.join(os.path.dirname(__file__), "ls2_2-0.pth"), logger=logger)
         self.images = None
         self.stride = stride
         self.next_position = None
@@ -46,6 +46,7 @@ class LionSight2:
         self.width = None
         self.bearing = None
         self.cross_bearing = None
+        self.detections = []
     
 
     def set_plan(self, entry_coord, exit_coord, width):
@@ -156,7 +157,6 @@ class LionSight2:
         '''
         Calculate the next stride based on the current position and the bearing.
         '''
-
         # check if this is the first step
         if self.next_position is None:
             # set the next position to the entry coordinate
@@ -189,7 +189,7 @@ class LionSight2:
         """
         Densely scan the entire stitched area, score with the network, and return top-K detections.
         """
-
+        print(f"[LionSight2] Starting dense detection with stride {self.stride}m and crop size {self.crop_size}px")
         results = []
 
         while self.next_stride() != -1:
@@ -198,7 +198,7 @@ class LionSight2:
             for img in self.images:
 
                 if self.next_position in img:
-
+  
                     # get the pixel within the image representing the center of the crop
                     img_x, img_y = img.get_pixels(self.next_position)
                     img_h, img_w = img.shape[:2]
@@ -209,14 +209,14 @@ class LionSight2:
                         img_y - half_crop >= 0 and img_y + half_crop < img_h):
 
                         # Crop the patch centered at (img_x, img_y)
-                        crop = img[img_y - half_crop:img_y + half_crop, img_x - half_crop:img_x + half_crop]
+                        crop = img.image[img_y - half_crop:img_y + half_crop, img_x - half_crop:img_x + half_crop]
                         self.net.img = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
                         probability = self.net.run_net()
 
-                        results.append((self.next_position.lat, self.next_position.lon, probability))
+                        self.detections.append((self.next_position.lat, self.next_position.lon, probability))
                         break  # Only use one image per crop
-
-        return results
+                
+        print(f"[LionSight2] Dense detection completed. Found {len(self.detections)} detections.")
 
 
 
@@ -238,8 +238,6 @@ class LionSight2:
 
         print(f"Stitched image size: {stitched_width} x {stitched_height}")
 
-        results = []
-
         total_positions = ((max_y - min_y - crop_size) // stride) * ((max_x - min_x - crop_size) // stride)
         progress_bar = tqdm(total=total_positions, desc="Dense CNN Scan")
 
@@ -254,7 +252,7 @@ class LionSight2:
                     # Does this image cover the crop?
                     if (img_x <= x < img_x + img_w - crop_size and
                         img_y <= y < img_y + img_h - crop_size):
-
+                        print("HERE")
                         rel_x = x - img_x
                         rel_y = y - img_y
 
@@ -288,6 +286,7 @@ class LionSight2:
         """
         Cluster detections using DBSCAN and return the average coordinates of the clusters.
         """
+
         detections = [detection for detection in self.detections if detection[2] > confidence_threshold]
 
         if not detections:
@@ -342,6 +341,9 @@ class LionSight2:
         return self.cluster_and_average(top_k=top_k, eps=eps, confidence_threshold=confidence_threshold)
 
 
+    def get_best_points(self, num_points=4):
+        return sorted(self.detections, key=lambda x: x[2])[-num_points:]
+    
 def get_ls2(stride=5, num_targets=4, crop_size=224, logger=None, block_emulator=False):
     '''
     Create a LionSight2 object with the specified parameters.
@@ -364,6 +366,8 @@ def get_ls2(stride=5, num_targets=4, crop_size=224, logger=None, block_emulator=
         return LionSight2(stride, num_targets, crop_size, logger)
 
 
+
+
 def main():
 
     import sys
@@ -379,17 +383,20 @@ def main():
     entry_point = Coordinate(38.315509271316046, -76.55080562662074, 0, use_int=False)
     exit_point = Coordinate(38.3157407480423, -76.55194738196501, 0, use_int=False)
 
-    lion_sight = LionSight2(entry_coord=entry_point, 
-                            exit_coord=exit_point, 
-                            width=30, 
+    lion_sight = LionSight2(
                             stride=5, 
                             num_targets=4, 
-                            crop_size=224)
+                            crop_size=224,
+                            logger=None,  # Replace with your logger if needed                            
+                            )
+
+    lion_sight.set_plan(entry_coord=entry_point, exit_coord=exit_point, width=30)
 
     lion_sight.images = coord_generator.generate_geo_images()
 
-    results = lion_sight.detect_dense()
-    best_points = lion_sight.cluster_and_average(results, top_k=8, eps=80)
+    lion_sight.detect_dense()
+    #best_points = lion_sight.cluster_and_average(top_k=8, eps=80, confidence_threshold=0.2)
+    best_points = lion_sight.get_best_points()
     end_time = time.time()
     for point in best_points:
         print(f"Point: {point[0]}, {point[1]}, Score: {point[2]}")
@@ -401,12 +408,11 @@ def main2():
     exit_coord = Coordinate(40.8410979035657,-77.69898679735358,0, use_int=False)
 
     ls2 = get_ls2(
-        entry_coord=entry_coord, 
-        exit_coord=exit_coord, 
-        width=30, 
         stride=5, 
         num_targets=4, 
-        crop_size=224
+        crop_size=224,
+        logger=None,  # Replace with your logger if needed
+        block_emulator=True  # Set to True to force using the real camera
     )
 
     targets = ls2.detect()
@@ -424,7 +430,7 @@ def main2():
     
 
 if __name__ == "__main__":
-    main2()
+    main()
 
 
 
